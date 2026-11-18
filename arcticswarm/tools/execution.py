@@ -66,6 +66,15 @@ class ToolExecutionMixin:
     emitting methods to avoid an import cycle with ``arcticswarm.agent``.
     """
 
+    def _contamination_keywords(self) -> tuple[str, ...]:
+        """Eval-awareness keywords: ``config.contamination_keywords`` or the default.
+
+        None keeps the BrowseComp default; folder-RAG runs pass [] because indexed
+        files may legitimately mention benchmark names (e.g. this repository).
+        """
+        cfg_kw = getattr(self.config, "contamination_keywords", None)
+        return _CONTAMINATION_KEYWORDS if cfg_kw is None else tuple(k.lower() for k in cfg_kw)
+
     def _execute_tool(self, name: str, input_data: dict[str, Any]) -> ToolResult:
         """Dispatch a tool call by name using this agent's tool registry."""
         tool = self._tools.get(name)
@@ -88,7 +97,7 @@ class ToolExecutionMixin:
             # Eval-awareness: filter browsing results that contain benchmark keywords
             if self.config.web_search_enabled and name in _CONTAMINATED_TOOLS and not result.is_error:
                 output_lower = (result.output or "").lower()
-                is_contaminated = any(kw in output_lower for kw in _CONTAMINATION_KEYWORDS)
+                is_contaminated = any(kw in output_lower for kw in self._contamination_keywords())
                 self.contamination_stats.record(excluded=is_contaminated)
                 if is_contaminated:
                     logger.info(
@@ -254,7 +263,7 @@ class ToolExecutionMixin:
 
             if self.config.web_search_enabled and name in _CONTAMINATED_TOOLS and not result.is_error:
                 output_lower = (result.output or "").lower()
-                is_contaminated = any(kw in output_lower for kw in _CONTAMINATION_KEYWORDS)
+                is_contaminated = any(kw in output_lower for kw in self._contamination_keywords())
                 self.contamination_stats.record(excluded=is_contaminated)
                 if is_contaminated:
                     logger.info("Eval-awareness: excluded %s result (contamination keyword found)", name)
@@ -467,7 +476,9 @@ class ToolExecutionMixin:
         disables. A trailing ``[Source Quality: ...]`` annotation (appended by
         the compactor / source scorer) is preserved across truncation.
         """
-        if result.is_error or name not in ("web_fetch", "pdf_read"):
+        # bash / python_execute are capped too: in folder RAG an agent can `cat` a
+        # huge file or print a whole dataframe in one call.
+        if result.is_error or name not in ("web_fetch", "pdf_read", "bash", "python_execute"):
             return
         cap_tokens = getattr(self.config, "max_tool_output_tokens", 0)
         if cap_tokens <= 0:

@@ -56,6 +56,14 @@ from arcticswarm.context_management import (
     _extract_token_usage,
 )
 from arcticswarm.system_prompt import build_system_prompt
+
+
+def _is_folder_corpus(config: Any) -> bool:
+    """True for local-folder RAG runs (corpus provider + folder backend)."""
+    return (
+        getattr(config, "web_search_provider", "") in ("corpus", "cortex-corpus")
+        and (getattr(config, "corpus_backend", "") or "").strip().lower() == "folder"
+    )
 from arcticswarm.tools.base import (
     BaseTool,
     ToolResult,
@@ -417,6 +425,7 @@ class Agent(ToolExecutionMixin, ContextManagementMixin, FallbackMixin):
             model=config.model,
             prompt_style=config.prompt_style,
             max_tool_calls_per_turn=config.max_tool_calls_per_turn,
+            folder_corpus=_is_folder_corpus(config),
         )
 
     @property
@@ -531,6 +540,7 @@ class Agent(ToolExecutionMixin, ContextManagementMixin, FallbackMixin):
             model=self.config.model,
             prompt_style=self.config.prompt_style,
             max_tool_calls_per_turn=self.config.max_tool_calls_per_turn,
+            folder_corpus=_is_folder_corpus(self.config),
         )
 
     def close(self) -> None:

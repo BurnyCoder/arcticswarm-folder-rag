@@ -696,7 +696,7 @@ class ContextManagementMixin:
                 else:
                     continue
                 name = id_to_name.get(cid or "", "")
-                if name not in ("web_fetch", "pdf_read"):
+                if name not in ("web_fetch", "pdf_read", "bash", "python_execute"):
                     continue
                 if isinstance(inner, str):
                     size = len(inner)

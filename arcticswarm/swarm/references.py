@@ -52,7 +52,8 @@ class Reference:
 # Helpers
 # ---------------------------------------------------------------------------
 
-_URL_RE = re.compile(r"https?://[^\s\)\]\"'>]+")
+# http(s) web URLs and corpus://<backend>/<id> citations (folder RAG: file#Lx-y).
+_URL_RE = re.compile(r"(?:https?|corpus)://[^\s\)\]\"'>]+")
 
 
 def _extract_urls(text: str) -> list[str]:
@@ -133,7 +134,8 @@ class ReferenceRegistry:
                         continue
                     registry._seen_keys.add(key)
 
-                    summary = f"Web: {source.title}" if source.title else f"Web: {source.url}"
+                    label = "File" if source.url.startswith("corpus://") else "Web"
+                    summary = f"{label}: {source.title}" if source.title else f"{label}: {source.url}"
                     registry._add(kind="web", summary=summary, detail=source.url)
             except Exception as e:
                 logger.warning(f"[ReferenceRegistry] Failed to add web_source_tracker sources: {e}")
@@ -144,7 +146,7 @@ class ReferenceRegistry:
             urls = _extract_urls(msg.content)
             for url_key in ("url", "source_url", "link"):
                 val = msg.structured_data.get(url_key, "")
-                if val and isinstance(val, str) and val.startswith("http"):
+                if val and isinstance(val, str) and val.startswith(("http", "corpus://")):
                     urls.append(val)
 
             for url in urls:
@@ -153,7 +155,8 @@ class ReferenceRegistry:
                     continue
                 registry._seen_keys.add(key)
 
-                registry._add(kind="web", summary=f"Web: {url}", detail=url)
+                label = "File" if url.startswith("corpus://") else "Web"
+                registry._add(kind="web", summary=f"{label}: {url}", detail=url)
 
         url_count_added = len(registry._refs) - url_count_before
         if url_count_added > 0:
@@ -346,7 +349,7 @@ class ReferenceRegistry:
                 anchor = html_mod.escape(ref.anchor_id)
                 idx = ref.index
 
-                if ref.kind == "web" and ref.detail.startswith("http"):
+                if ref.kind == "web" and ref.detail.startswith(("http", "corpus://")):
                     url_esc = html_mod.escape(ref.detail)
                     summary_esc = html_mod.escape(ref.summary)
                     parts.append(

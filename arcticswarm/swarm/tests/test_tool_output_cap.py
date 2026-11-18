@@ -168,8 +168,13 @@ def test_cap_tool_output_ignores_other_tools_and_errors():
     big = "z" * 500_000
 
     other = ToolResult(output=big)
-    _cap("bash", other, cap_tokens=5000)
-    assert other.output == big  # non web_fetch/pdf_read untouched
+    _cap("calculator", other, cap_tokens=5000)
+    assert other.output == big  # tools outside the capped set are untouched
+
+    # bash / python_execute are capped too (folder RAG: `cat` of a huge file).
+    shell = ToolResult(output=big)
+    _cap("bash", shell, cap_tokens=5000)
+    assert len(shell.output) <= 5000 * 4
 
     errored = ToolResult(error="boom", is_error=True, output=big)
     _cap("web_fetch", errored, cap_tokens=5000)
