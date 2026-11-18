@@ -32,7 +32,7 @@ Full details are in the companion repo `BurnyCoder/arcticswarm-folder-rag-resear
 - **Cost:** the swarm cost much more per question. Exact figures, generated from the result files, are in the companion repo.
 - **Agent-count sweep:** see below.
 
-An agent-count sweep (`swarm.max_subagents` 2/4/8/32) is reported there as well. Caps of 8 or more never bound, because the orchestrator spawned about 6–7 agents; caps of 2–4 mostly ran into the time budget; and no cap beat the single agent. These are exploratory results from small samples.
+An agent-count sweep (`swarm.max_subagents` 2/4/8/16/32, where 16 is the default and the main run) is reported there as well. Caps of 8 or more never bound, because the orchestrator spawned about 6–7 agents; caps of 2–4 mostly ran into the time budget; and no cap beat the single agent. These are exploratory results from small samples.
 
 ## Quick start (folder RAG)
 
