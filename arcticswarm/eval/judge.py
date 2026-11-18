@@ -176,22 +176,17 @@ class LLMJudge:
                 api_version=os.environ.get("OPENAI_API_VERSION") or settings.get("OPENAI_API_VERSION", "2025-04-01-preview"),
             )
         else:
-            client_kwargs: dict[str, Any] = {}
-            is_custom = base_url and base_url != "https://api.anthropic.com"
-            if api_key:
-                if is_custom:
-                    client_kwargs["auth_token"] = api_key
-                else:
-                    client_kwargs["api_key"] = api_key
-            if is_custom:
-                client_kwargs["base_url"] = base_url
-            self._client = anthropic.Anthropic(**client_kwargs)
+            from arcticswarm.llm_client import anthropic_client_kwargs
 
-        # Load prompt templates
-        self._qa_prompt = (_PROMPTS_DIR / "qa_eval.txt").read_text()
-        self._answer_only_prompt = (_PROMPTS_DIR / "answer_only_eval.txt").read_text()
-        self._browsecomp_prompt = (_PROMPTS_DIR / "browsecomp_eval.txt").read_text()
-        self._browsecomp_plus_prompt = (_PROMPTS_DIR / "browsecomp_plus_eval.txt").read_text()
+            # Same construction as the agents: workspace header + SDK retries.
+            self._client = anthropic.Anthropic(**anthropic_client_kwargs(api_key, base_url))
+
+        # Load prompt templates (UTF-8 explicitly: answer_only_eval.txt contains
+        # non-ASCII and the Windows default codec is cp1252).
+        self._qa_prompt = (_PROMPTS_DIR / "qa_eval.txt").read_text(encoding="utf-8")
+        self._answer_only_prompt = (_PROMPTS_DIR / "answer_only_eval.txt").read_text(encoding="utf-8")
+        self._browsecomp_prompt = (_PROMPTS_DIR / "browsecomp_eval.txt").read_text(encoding="utf-8")
+        self._browsecomp_plus_prompt = (_PROMPTS_DIR / "browsecomp_plus_eval.txt").read_text(encoding="utf-8")
 
         # Optional user-supplied custom judge rubric. When set, ``judge_custom``
         # is used for every case (see ``data_loader``/``cli`` wiring). The

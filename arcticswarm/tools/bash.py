@@ -72,7 +72,17 @@ class BashTool(BaseTool):
         "(e.g. download → crop → OCR) still see each other's outputs."
     )
 
-    def __init__(self) -> None:
+    SANDBOX_DESCRIPTION = (
+        "Run a bash command in an isolated Linux sandbox where you are root. The "
+        "folder being researched is at $CORPUS_ROOT (cd there; paths relative to it "
+        "are the citable file paths). Use grep/rg/find/awk/sed/jq/pdftotext, pipes "
+        "and scripts for exact-string, regex and structural search. You may install "
+        "any tool: `apt-get install -y <pkg>`, `pip install <pkg>`. Commands start in "
+        "a persistent per-agent scratch dir; output is truncated, so filter with "
+        "head/grep -c/wc. No internet except package installs."
+    )
+
+    def __init__(self, exec_settings: Any = None) -> None:
         # Per-instance persistent scratch directory.  Created lazily on the
         # first ``execute`` call that does not override ``working_directory``,
         # and removed in ``__del__`` / ``close`` when the tool (and therefore
@@ -80,6 +90,15 @@ class BashTool(BaseTool):
         # clean up between calls: agents often do multi-step file work and
         # need the previous call's artefacts to still be on disk.
         self._scratch_dir: str | None = None
+        # Optional sandbox backend (tools/sandbox_exec.py): with exec_backend=wsl
+        # commands run inside the WSL sandbox distro instead of a host shell.
+        self._sandbox = None
+        self._default_timeout = _DEFAULT_TIMEOUT
+        if exec_settings is not None and getattr(exec_settings, "is_wsl", False):
+            from arcticswarm.tools.sandbox_exec import WslSandbox
+            self._sandbox = WslSandbox(exec_settings)
+            self._default_timeout = exec_settings.bash_timeout
+            self.description = self.SANDBOX_DESCRIPTION
 
     def _ensure_scratch_dir(self) -> str:
         """Return the per-instance scratch dir, creating it on first use."""
@@ -127,14 +146,33 @@ class BashTool(BaseTool):
             "required": ["command"],
         }
 
+    def _execute_sandbox(self, command: str, timeout: int | None, working_directory: str | None) -> ToolResult:
+        """Run ``command`` in the WSL sandbox (see tools/sandbox_exec.py)."""
+        t = int(timeout or self._default_timeout)
+        rc, out, err, timed_out = self._sandbox.run(command, timeout=t, cwd=working_directory)
+        if timed_out:
+            return ToolResult(error=f"Command timed out after {t}s: {command}", is_error=True)
+        parts = []
+        if out:
+            parts.append(_truncate_output(out))
+        if err:
+            parts.append(f"STDERR:\n{_truncate_output(err)}")
+        output = "\n".join(parts) if parts else "(no output)"
+        if rc != 0:
+            return ToolResult(output=output, error=f"Exit code {rc}\n{output}", is_error=True)
+        return ToolResult(output=output)
+
     def execute(
         self,
         *,
         command: str,
-        timeout: int = _DEFAULT_TIMEOUT,
+        timeout: int | None = None,
         working_directory: str | None = None,
         **_: Any,
     ) -> ToolResult:
+        if self._sandbox is not None:
+            return self._execute_sandbox(command, timeout, working_directory)
+        timeout = int(timeout or self._default_timeout)
         # Default precedence:
         #   1. explicit working_directory= argument (always wins)
         #   2. per-instance scratch dir (default — keeps generated files

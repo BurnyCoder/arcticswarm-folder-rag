@@ -882,8 +882,9 @@ class CompleteTaskTool(BaseTool):
                 "Mark a claimed task as completed with a detailed summary. "
                 "The orchestrator relies on this summary to understand your work. "
                 "Include: (1) the answer/finding with key numbers, "
-                "(2) the web searches and sources you consulted, "
-                "(3) source URLs for every claim, "
+                "(2) the searches/commands and sources you consulted, "
+                "(3) source URLs or corpus://folder/<path>#L<a>-<b> file "
+                "citations for every claim, "
                 "(4) any caveats or uncertainties."
             )
         return (
@@ -899,7 +900,8 @@ class CompleteTaskTool(BaseTool):
         if self._profile == "browsing":
             summary_desc = (
                 "Detailed summary of findings. Include: key numbers/answer, "
-                "web searches performed, source URLs, and any caveats or "
+                "searches/commands performed, source URLs or corpus://folder "
+                "file citations, and any caveats or "
                 "open questions. This is the orchestrator's primary window "
                 "into your work."
             )
@@ -2822,7 +2824,9 @@ class PrepareReportTool(BaseTool):
             if sa is None:
                 continue
             counts = getattr(getattr(sa, "agent", None), "tool_calls_by_name", {}) or {}
-            web = counts.get("web_search", 0) + counts.get("web_fetch", 0)
+            # Folder RAG: bash / python_execute over the corpus also count as
+            # first-hand evidence gathering (builder), not just web_search/fetch.
+            web = sum(counts.get(t, 0) for t in ("web_search", "web_fetch", "bash", "python_execute"))
             if web > 0:
                 builders.add(author)
             else:
@@ -2892,7 +2896,8 @@ class PrepareReportTool(BaseTool):
                     "## Independent first-hand verification\n\n"
                     "Independently re-verify the leading candidate answer the "
                     "team has converged on by gathering your OWN first-hand "
-                    "evidence — you MUST run web_search / web_fetch to confirm "
+                    "evidence — you MUST run web_search / web_fetch (or, over a "
+                    "local folder, bash / python_execute) to confirm "
                     "the key constraints from primary sources (do not rely only "
                     "on other agents' BBS posts).\n\n"
                     f"{cand}\n\n"

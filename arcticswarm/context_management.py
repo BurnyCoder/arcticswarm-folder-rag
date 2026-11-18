@@ -54,6 +54,7 @@ _MODEL_CONTEXT_LIMITS: dict[str, int] = {
     "claude-sonnet-4-5": 200_000,
     "claude-opus-4-5": 200_000,
     "claude-haiku-4-5": 200_000,
+    "claude-haiku-5-5": 1_000_000,  # 1M context (Anthropic model table)
     # OpenAI
     "gpt-4o": 128_000,
     "gpt-4o-mini": 128_000,
@@ -695,7 +696,7 @@ class ContextManagementMixin:
                 else:
                     continue
                 name = id_to_name.get(cid or "", "")
-                if name not in ("web_fetch", "pdf_read"):
+                if name not in ("web_fetch", "pdf_read", "bash", "python_execute"):
                     continue
                 if isinstance(inner, str):
                     size = len(inner)

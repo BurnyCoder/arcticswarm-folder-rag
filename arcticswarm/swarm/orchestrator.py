@@ -63,6 +63,7 @@ from arcticswarm.swarm.names import assign_names
 from arcticswarm.swarm.prompts import (
     build_orchestrator_system_prompt,
 )
+from arcticswarm.agent import _is_folder_corpus
 from arcticswarm.swarm.task import AgentRegistry, TaskBoard
 from arcticswarm.swarm.teammate import _TimingCollector, _inject_timings_into_messages
 from arcticswarm.swarm.tools import (
@@ -1380,6 +1381,7 @@ class SwarmOrchestrator(DmMixin, DuoMixin):
             force_bbs_isolation=self.config.force_bbs_isolation,
             enforce_alt_task=getattr(self.config, "enforce_alt_task", True),
             skill_overrides=getattr(self.config, "skill_overrides", None),
+            folder_corpus=_is_folder_corpus(self.config),
         )
 
         # Forward orchestrator events to the swarm UI.
@@ -1651,7 +1653,7 @@ class SwarmOrchestrator(DmMixin, DuoMixin):
                 # so they post partial findings to BBS.
                 _PRE_SHUTDOWN_FRACTION = 0.90
                 _BLOCKED_SUBAGENT_TOOLS = frozenset({
-                    "web_search", "web_fetch", "pdf_read",
+                    "web_search", "web_fetch", "pdf_read", "bash", "python_execute",
                 })
                 _pre_timer: threading.Timer | None = None
                 if (

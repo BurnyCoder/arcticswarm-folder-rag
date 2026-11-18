@@ -37,7 +37,9 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # The CSV can contain extremely long fields (tool descriptions, etc.)
-csv.field_size_limit(sys.maxsize)
+# Windows' C long is 32-bit, so sys.maxsize overflows csv's limit (OverflowError at
+# import). 2**31-1 is the largest value accepted on every platform.
+csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
 _DATA_DIR = Path(__file__).parent / "data"
 

@@ -87,10 +87,26 @@ def test_execute_tool_still_applies_contamination_filter():
     src = inspect.getsource(Agent._execute_tool)
     # Must reference the keyword list, the contaminated-tools set, and the
     # placeholder — i.e. the filter is still applied on the hot path.
-    assert "_CONTAMINATION_KEYWORDS" in src
+    # Keywords now come from a helper (config.contamination_keywords, defaulting
+    # to _CONTAMINATION_KEYWORDS) so folder-RAG runs can disable the filter.
+    assert "_contamination_keywords()" in src or "_CONTAMINATION_KEYWORDS" in src
     assert "_CONTAMINATED_TOOLS" in src
     assert "_CONTAMINATION_PLACEHOLDER" in src
     assert "contamination_excluded" in src, (
         "Filter must still tag the metadata with 'contamination_excluded' "
         "so the eval harness can report how many results were redacted."
     )
+
+
+def test_contamination_keywords_configurable():
+    """config.contamination_keywords: None -> default list, [] -> filter disabled."""
+    from types import SimpleNamespace
+
+    from arcticswarm.tools.execution import _CONTAMINATION_KEYWORDS, ToolExecutionMixin
+
+    holder = SimpleNamespace(config=SimpleNamespace(contamination_keywords=None))
+    assert ToolExecutionMixin._contamination_keywords(holder) == _CONTAMINATION_KEYWORDS
+    holder.config.contamination_keywords = []
+    assert ToolExecutionMixin._contamination_keywords(holder) == ()
+    holder.config.contamination_keywords = ["SecretBench"]
+    assert ToolExecutionMixin._contamination_keywords(holder) == ("secretbench",)

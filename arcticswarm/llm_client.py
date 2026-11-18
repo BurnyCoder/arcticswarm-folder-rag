@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -144,6 +145,102 @@ def _patch_httpx_client_del() -> None:
 _patch_httpx_client_del()
 
 
+_LLM_LOG_LOCK = __import__("threading").Lock()
+_LLM_LOG_SEEN_SYSTEM: set[str] = set()
+
+
+def log_llm_call(
+    kwargs: dict[str, Any],
+    *,
+    content_blocks: list[dict[str, Any]] | None = None,
+    stop_reason: str = "",
+    usage: dict[str, Any] | None = None,
+    latency_s: float = 0.0,
+    error: str = "",
+) -> None:
+    """Append one Anthropic request/response record to ``$ARCTICSWARM_LLM_LOG`` (JSONL).
+
+    Local: opt-in (no env var = no-op). To capture *every* prompt and output without
+    quadratic growth (each request re-sends the whole history), a record stores the
+    full system prompt only the first time its hash is seen, the tool names, the
+    number of messages, the **newest** request message in full (the delta since the
+    previous call: user text or tool results) and the full response blocks
+    (thinking, text, tool calls) plus usage and latency. Nothing is truncated.
+
+    Global: used by AnthropicLLMClient.call / call_streaming, so orchestrator,
+    subagents, reviewers, compaction and reflection calls are all logged; the thread
+    name identifies the agent thread.
+    """
+    path = os.environ.get("ARCTICSWARM_LLM_LOG", "").strip()
+    if not path:
+        return
+    import hashlib
+    import threading
+    from datetime import datetime, timezone
+
+    system = kwargs.get("system")
+    system_text = json.dumps(system, ensure_ascii=False, default=str) if system is not None else ""
+    sys_hash = hashlib.sha1(system_text.encode("utf-8")).hexdigest()[:12]
+    msgs = kwargs.get("messages") or []
+    record: dict[str, Any] = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "thread": threading.current_thread().name,
+        "model": kwargs.get("model"),
+        "max_tokens": kwargs.get("max_tokens"),
+        "thinking": kwargs.get("thinking"),
+        "output_config": (kwargs.get("extra_body") or {}).get("output_config"),
+        "system_hash": sys_hash,
+        "tools": [t.get("name") for t in (kwargs.get("tools") or []) if isinstance(t, dict)],
+        "n_messages": len(msgs),
+        "new_message": msgs[-1] if msgs else None,
+        "response": content_blocks,
+        "stop_reason": stop_reason,
+        "usage": usage or {},
+        "latency_s": round(latency_s, 3),
+        "error": error,
+    }
+    with _LLM_LOG_LOCK:
+        if sys_hash not in _LLM_LOG_SEEN_SYSTEM:
+            _LLM_LOG_SEEN_SYSTEM.add(sys_hash)
+            record["system"] = system
+        try:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        except OSError as exc:  # logging must never break a run
+            logger.warning("LLM call log write failed (%s): %s", path, exc)
+
+
+def anthropic_client_kwargs(api_key: str = "", base_url: str = "") -> dict[str, Any]:
+    """Build ``anthropic.Anthropic(**kwargs)`` arguments shared by agents and the judge.
+
+    Local: maps (api_key, base_url) to SDK kwargs exactly as before (a custom
+    base_url means a proxy that wants ``auth_token``), and adds two things the
+    public API needs for long swarm runs:
+
+    * ``anthropic-workspace-id`` header from ``ANTHROPIC_WORKSPACE_ID`` — API keys
+      that are not scoped to a workspace get HTTP 400 without it (observed in
+      scripts/probe_haiku.py on 2026-11-18).
+    * ``max_retries`` (env ``ARCTICSWARM_ANTHROPIC_MAX_RETRIES``, default 8): the
+      SDK's own exponential backoff honours ``retry-after`` on 429/529/5xx. The
+      framework's ``fallback.is_retryable`` only recognises OpenAI exception types,
+      so without this Anthropic rate limits surfaced after the SDK default of 2.
+
+    Global: every Anthropic client in the package (agent LLM client, eval judge)
+    goes through this helper so headers/retries stay consistent.
+    """
+    kwargs: dict[str, Any] = {}
+    is_custom = bool(base_url) and base_url != "https://api.anthropic.com"
+    if api_key:
+        kwargs["auth_token" if is_custom else "api_key"] = api_key
+    if is_custom:
+        kwargs["base_url"] = base_url
+    workspace = os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip()
+    if workspace:
+        kwargs["default_headers"] = {"anthropic-workspace-id": workspace}
+    kwargs["max_retries"] = int(os.environ.get("ARCTICSWARM_ANTHROPIC_MAX_RETRIES", "8"))
+    return kwargs
+
+
 class AnthropicLLMClient(BaseLLMClient):
     """Wraps ``anthropic.Anthropic`` and normalises responses."""
 
@@ -157,16 +254,8 @@ class AnthropicLLMClient(BaseLLMClient):
     ) -> None:
         import anthropic
 
-        client_kwargs: dict[str, Any] = {}
-        is_custom = base_url and base_url != "https://api.anthropic.com"
-        if api_key:
-            if is_custom:
-                client_kwargs["auth_token"] = api_key
-            else:
-                client_kwargs["api_key"] = api_key
-        if is_custom:
-            client_kwargs["base_url"] = base_url
-        self._client = anthropic.Anthropic(**client_kwargs)
+        # Shared construction: workspace header + SDK retries (see helper docstring).
+        self._client = anthropic.Anthropic(**anthropic_client_kwargs(api_key, base_url))
         self._enable_1m_context_model = enable_1m_context_model
         self._disable_extended_thinking = disable_extended_thinking
 
@@ -259,9 +348,23 @@ class AnthropicLLMClient(BaseLLMClient):
     }
 
     # Models that use adaptive thinking (effort-based) instead of budget-based.
+    # Matched with ``model.startswith(prefix)``. Claude 4.6+ generations take
+    # ``thinking={"type": "adaptive"}`` + ``output_config.effort``; on Haiku 5.5
+    # (and Opus 4.7+/5.x, Sonnet 5.x, Fable) ``{"type": "enabled", "budget_tokens"}``
+    # is rejected with HTTP 400 — verified for claude-haiku-5-5 by
+    # scripts/probe_haiku.py ("thinking.type.enabled is not supported for this
+    # model. Use thinking.type.adaptive and output_config.effort"). Source for the
+    # per-model rules: Anthropic model-migration guide / thinking table.
     _ADAPTIVE_THINKING_MODELS: frozenset[str] = frozenset({
         "claude-opus-4-6",
         "claude-opus-4-6-20250501",
+        "claude-sonnet-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-5",      # also matches claude-opus-5-5
+        "claude-sonnet-5",    # also matches claude-sonnet-5-5
+        "claude-haiku-5",     # claude-haiku-5-5
+        "claude-fable",
     })
 
     # Models that should NEVER use extended/adaptive thinking.
@@ -531,13 +634,21 @@ class AnthropicLLMClient(BaseLLMClient):
             self._maybe_attach_1m_context_beta(kwargs, model)
             self._apply_max_tokens_guards(kwargs)
 
-            response = self._client.messages.create(**kwargs)
+            t0 = time.monotonic()
+            try:
+                response = self._client.messages.create(**kwargs)
+            except Exception as exc:
+                log_llm_call(kwargs, latency_s=time.monotonic() - t0, error=repr(exc))
+                raise
         finally:
             self._restore_cache_breakpoint(saved)
 
         u = self._extract_usage(response.usage) if response.usage else {}
+        blocks = self._normalise_content(response.content)
+        log_llm_call(kwargs, content_blocks=blocks, stop_reason=response.stop_reason or "",
+                     usage=u, latency_s=time.monotonic() - t0)
         return LLMResponse(
-            content_blocks=self._normalise_content(response.content),
+            content_blocks=blocks,
             stop_reason=response.stop_reason or "",
             **u,
         )
@@ -585,6 +696,7 @@ class AnthropicLLMClient(BaseLLMClient):
             text_parts: list[str] = []
             # Diagnostic: capture a lightweight summary of every streaming event.
             _event_log: list[dict[str, Any]] = []
+            t0 = time.monotonic()
 
             with self._client.messages.stream(**kwargs) as stream:
                 for event in stream:
@@ -649,11 +761,19 @@ class AnthropicLLMClient(BaseLLMClient):
                     _event_log.append(evt_entry)
 
                 final_message = stream.get_final_message()
+        except Exception as exc:
+            # Log failed requests too (rate limits, 400s) before propagating.
+            if "kwargs" in locals():
+                log_llm_call(kwargs, latency_s=time.monotonic() - locals().get("t0", time.monotonic()),
+                             error=repr(exc))
+            raise
         finally:
             self._restore_cache_breakpoint(saved)
 
         content_blocks = self._normalise_content(final_message.content)
         u = self._extract_usage(final_message.usage) if final_message.usage else {}
+        log_llm_call(kwargs, content_blocks=content_blocks, stop_reason=final_message.stop_reason or "",
+                     usage=u, latency_s=time.monotonic() - t0)
 
         # Attach raw event log only when the response is empty (diagnostics).
         raw_log = _event_log if not content_blocks else []

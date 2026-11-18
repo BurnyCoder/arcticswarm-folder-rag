@@ -1,3 +1,49 @@
+# ArcticSwarm — folder-RAG fork (Claude Haiku 5.5, local folders, sandboxed code)
+
+> **This is a private, modified copy of [Snowflake-AI-Research/ArcticSwarm](https://github.com/Snowflake-AI-Research/ArcticSwarm)** (Apache-2.0), branch **`folder-rag`**.
+> It adapts ArcticSwarm from live-web deep research to **retrieval-augmented generation (RAG) over a local folder of many files**, with no web search, every agent on **Claude Haiku 5.5**, and agents allowed to **run arbitrary bash/Python over the files** in an isolated Linux sandbox.
+> The evaluation harness, preregistration and reports are in the companion repo `BurnyCoder/arcticswarm-folder-rag-research`, which uses this repo as a git submodule.
+> The original README follows below the horizontal rule, unchanged.
+
+## What this fork changes (branch `folder-rag`)
+
+| Area | Change | Files |
+|---|---|---|
+| **Folder corpus** | New `web.corpus_backend: folder`:<br>• walks a directory, skipping `.git`, caches and binaries<br>• extracts text (UTF-8, PDF via pypdf, DOCX/PPTX/HTML via markitdown)<br>• splits line-aligned ~1,500-char chunks, ranked with BM25 ([bm25s](https://github.com/xhluca/bm25s)); identifiers split on snake/camel case and paths<br>• index persisted and memoised per process<br>Citations are `corpus://folder/<path>#L<a>-<b>`. `web_fetch` reads a file or line span by path, with paging. | `arcticswarm/tools/folder_corpus.py`, `tools/corpus_search.py`, `tools/corpus_retriever.py` |
+| **Arbitrary code over the folder** | New `tools.exec_backend: wsl`. `bash` and `python_execute` run as **root in a dedicated WSL2 Ubuntu distro**:<br>• no Windows drive mounts, no interop, no API keys<br>• agents can `apt-get install` / `pip install` anything; `python_execute(packages=[...])` installs PyPI libraries<br>• `$CORPUS_ROOT` points at the corpus copy<br>• soft no-web proxy guard that allows package hosts only<br>The `local` backend is unchanged, except that `python_execute` now uses `sys.executable`. | `tools/sandbox_exec.py`, `tools/bash.py`, `tools/python_execute.py` |
+| **Claude Haiku 5.5** | Haiku 5.5 and other Claude 4.6+ models use adaptive thinking with `output_config.effort`. `budget_tokens` returns HTTP 400 on them; this was verified with an API probe. | `llm_client.py` |
+| **API keys / retries** | `anthropic-workspace-id` header from `ANTHROPIC_WORKSPACE_ID`, required by keys not scoped to a workspace. SDK `max_retries` (default 8) handles 429/529. | `llm_client.py`, `eval/judge.py` |
+| **Native Windows** | `csv.field_size_limit` overflow, POSIX-only `fcntl`/`tty`/`termios` imports, and UTF-8 file reads. | `eval/data_loader.py`, `tools/cache_sync.py`, `cli.py`, `tools/corpus_retriever.py` |
+| **Security fix** | Scorer/compactor fallbacks no longer send the **Anthropic key to OpenAI** when no OpenAI key is configured. | `tools/factory.py`, `tools/source_scorer.py` |
+| **Bug fix** | `fallback.py` used an undefined `logger`. The resulting NameError silently disabled the empty-response fallback ladder. | `fallback.py` |
+| **Folder-aware prompts and gates** | • Folder identity in the system prompt and the orchestrator profile blurb<br>• code tools count as first-hand evidence for builder reviewers, and are blocked at wind-down and capped in output<br>• configurable contamination keywords<br>• `corpus://` references in reports | `system_prompt.py`, `swarm/prompts.py`, `swarm/tools.py`, `swarm/teammate.py`, `swarm/orchestrator.py`, `tools/execution.py`, `swarm/references.py` |
+| **Skills** | `folder-research`, `tool-usage-policy-folder`, `swarm-orchestration-dynamic-folder`. The last is the dynamic web skill with region/language pivots, anti-fame bias and "always one answer" removed, since folders can lack the answer. | `arcticswarm/skills/` |
+| **Logging** | Opt-in full LLM call log `ARCTICSWARM_LLM_LOG=<file.jsonl>`. It records every prompt delta and every response, with no truncation. | `llm_client.py` |
+| **Dependencies** | The heavy `opendataloader-pdf[hybrid]` (docling + torch) becomes an optional `pdf` extra. New `folder` extra: `bm25s`, `PyStemmer`. | `pyproject.toml` |
+| **Configs** | `conf/bench/folder_rag.yaml` (gated-BBS swarm) and `conf/bench/folder_rag_single_agent.yaml` (single-agent overlay) | `conf/bench/` |
+
+Tests: `pytest` gives 286 passed and 2 skipped on Windows. The two skips are POSIX-`pwd` assertions for the local bash backend. New tests are in `swarm/tests/test_folder_corpus.py` and `swarm/tests/test_sandbox_exec.py`; the WSL integration tests are skipped when the sandbox distro is absent.
+
+## Quick start (folder RAG)
+
+1. Install from the companion repo, or directly with `pip install -e ".[folder]"`.
+2. Put `ANTHROPIC_API_KEY`, plus `ANTHROPIC_WORKSPACE_ID` if your key needs it, in the environment.
+3. Optional, for the code tools: create the sandbox distro, e.g. with `wsl --install Ubuntu-24.04 --name arcticswarm-sandbox --no-launch`. Configure it with the companion repo's `folderrag sandbox`, which handles isolation, base tools and the agent venv. Then copy your folder to `/corpus/<name>` inside it.
+4. Run against your own CSV of questions:
+
+```bash
+arcticswarm-eval -c conf/bench/folder_rag.yaml \
+  web.corpus_local_path=/path/to/your/folder \
+  tools.exec_corpus_root=/corpus/<name> \
+  eval.csv_path=questions.csv eval.datasets=[MYDATA] eval.output=results/my_run
+# single-agent baseline: add  -c conf/bench/folder_rag_single_agent.yaml
+# no sandbox available: add   tools.exec_backend=local  (or drop bash/python_execute from the profile)
+```
+
+The CSV format is ArcticSwarm's unified eval CSV; see `docs/custom_evaluation.md`. Questions should ask for a `FINAL ANSWER:` line if you want short answers.
+
+---
+
 <!--
   Before making the repo public, replace <your-org> below with the real GitHub
   org/repo (clone command + optionally uncomment [project.urls] in pyproject.toml).

@@ -1,0 +1,77 @@
+# ArcticSwarm gated-BBS swarm for RAG over a LOCAL FOLDER (no web), all on Claude Haiku 5.5.
+#
+# Derived from conf/bench/browsecomp_plus.yaml (the paper's fixed-corpus preset), with:
+#   * web.corpus_backend: folder  -> BM25 over line-aligned chunks of every file
+#     (arcticswarm/tools/folder_corpus.py); web_fetch reads files by path.
+#   * bash / python_execute in the browsing profile, executed in a WSL2 sandbox
+#     (tools.exec_backend: wsl; arcticswarm/tools/sandbox_exec.py).
+#   * folder skills (folder-research, tool-usage-policy-folder,
+#     swarm-orchestration-dynamic-folder) replacing the web/corpus skills.
+#   * Haiku-scale budgets: the paper preset allows 1200 turns and 9000 s per
+#     question with xhigh effort; here turns/time are capped to fit a $50/day budget.
+#
+# Per-run values are passed as CLI overrides by the harness (src/folderrag/run.py):
+#   web.corpus_local_path, web.folder_index_dir, tools.exec_corpus_root,
+#   tools.exec_proxy, tools.exec_no_proxy, eval.csv_path, eval.datasets,
+#   eval.custom_judge_prompt, eval.output.
+
+tools:
+  # Single-agent mode (swarm.enabled=false) uses this pool.
+  agent: [load_skill, web_search, web_fetch, bash, python_execute]
+  orchestrator: [reasoning, load_skill]
+  agent_skills: [folder-research, tool-usage-policy-folder]
+  profiles:
+    browsing:
+      tools: [web_search, web_fetch, bash, python_execute]
+      skills: [folder-research, tool-usage-policy-folder]
+    reasoning:
+      tools: [reasoning]
+      skills: [deep-reasoning]
+  exec_backend: wsl
+  exec_wsl_distro: arcticswarm-sandbox
+  exec_bash_timeout: 60
+  exec_python_timeout: 300
+
+swarm:
+  enabled: true
+  profiles: [browsing, reasoning]
+  enable_force_submit: false
+  auditor_reasoning_effort: medium
+  # Use the folder variant of the dynamic orchestration skill (no web-specific
+  # region/language pivots or anti-fame-bias rules).
+  skill_overrides:
+    swarm-orchestration-dynamic-web: swarm-orchestration-dynamic-folder
+
+web:
+  enabled: true            # must stay true: corpus mode is gated on "web search capability"
+  provider: corpus
+  corpus_backend: folder
+  no_fetch: false
+  fetch_backend: corpus
+  use_fetch_compactor: false
+  use_pdf_compactor: false
+  disable_source_scorer: true   # extra LLM call per search; off for cost
+  max_tool_output_tokens: 5000  # same cap as the paper's BrowseComp-Plus preset
+  folder_chunk_chars: 1500
+  contamination_keywords: []    # indexed files may legitimately mention benchmarks
+
+llm:
+  model: claude-haiku-5-5
+  reasoning_effort: high
+  subagent_reasoning_effort: medium
+  max_tokens: 32000
+  max_turns: 150
+  subagent_max_turns: 60
+  enable_1m_context: false
+  compact_tokens: 90000          # stay under the 100K-token cheaper rate card
+  disable_closed_model_fallback: true
+
+azure:
+  enabled: false
+
+eval:
+  judge_model: claude-haiku-5-5
+  qa_llm: true
+  parallel: 4
+  timeout: 900
+  checkpoint_interval: 1

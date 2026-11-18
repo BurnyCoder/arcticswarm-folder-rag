@@ -339,7 +339,7 @@ class LocalCorpusRetriever(CorpusRetriever):
         path = Path(self._corpus_path) if self._corpus_path else None
         if path and path.exists():
             try:
-                with path.open() as fh:
+                with path.open(encoding="utf-8") as fh:
                     for line in fh:
                         line = line.strip()
                         if not line:
@@ -431,6 +431,19 @@ def build_corpus_retriever(config: Any, sf_client: Any = None) -> CorpusRetrieve
         )
     if backend == "local":
         return LocalCorpusRetriever(getattr(config, "corpus_local_path", ""))
+    if backend == "folder":
+        # A directory of arbitrary files (corpus_local_path = folder root), BM25 over
+        # line-aligned chunks. Memoised per process: see tools/folder_corpus.py.
+        from arcticswarm.tools.folder_corpus import get_folder_retriever
+        retriever = get_folder_retriever(
+            getattr(config, "corpus_local_path", ""),
+            index_dir=getattr(config, "folder_index_dir", ""),
+            chunk_chars=int(getattr(config, "folder_chunk_chars", 1500) or 1500),
+        )
+        sandbox_root = getattr(config, "exec_corpus_root", "")
+        if sandbox_root and sandbox_root not in retriever.alias_roots:
+            retriever.alias_roots.append(sandbox_root)
+        return retriever
     if backend not in ("stub", ""):
         logger.warning("Unknown web.corpus_backend=%r; using stub.", backend)
     return StubCorpusRetriever()

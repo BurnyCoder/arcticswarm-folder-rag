@@ -42,7 +42,10 @@ ENVIRONMENT.md for the cache env vars (paths, optional S3 bucket/prefix).
 from __future__ import annotations
 
 import atexit
-import fcntl
+try:  # POSIX advisory locks; unavailable on Windows
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
 import logging
 import os
 import shutil
@@ -109,12 +112,14 @@ def _flock(path: Path, exclusive: bool):
     class _L:
         def __enter__(self_):
             self_.f = open(path, "w")
-            fcntl.flock(self_.f, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+            if fcntl is not None:  # no-op lock on Windows (single-host use only)
+                fcntl.flock(self_.f, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
             return self_
 
         def __exit__(self_, *a):
             try:
-                fcntl.flock(self_.f, fcntl.LOCK_UN)
+                if fcntl is not None:
+                    fcntl.flock(self_.f, fcntl.LOCK_UN)
                 self_.f.close()
             except Exception:
                 pass

@@ -96,6 +96,26 @@ class ToolFactory:
     # Source scorer (shared dependency for web tools)
     # ------------------------------------------------------------------
 
+    def _no_closed_fallback(self, detect_provider: Any) -> bool:
+        """True when scorer/compactor must NOT fall back to the OpenAI GPT path.
+
+        Previously this was only set for self-hosted vLLM models. With a Claude
+        agent and no ``openai_api_key``, the fallback built an OpenAI client with
+        ``openai_api_key or api_key`` — i.e. it sent the *Anthropic* key to
+        api.openai.com as a Bearer token. Now the fallback is disabled for vLLM
+        runs, when the run config disables closed-model fallback, or when no
+        OpenAI/Azure credentials exist.
+        """
+        cfg = self.config
+        has_openai = bool((getattr(cfg, "openai_api_key", "") or "").strip()) or bool(
+            getattr(cfg, "use_azure_openai", False) and getattr(cfg, "azure_openai_api_key", "")
+        )
+        return (
+            detect_provider(cfg.model) == "vllm"
+            or bool(getattr(cfg, "disable_closed_model_fallback", False))
+            or not has_openai
+        )
+
     def _ensure_source_scorer(self) -> Any | None:
         if self._source_scorer is not None:
             return self._source_scorer
@@ -116,7 +136,7 @@ class ToolFactory:
                 agent_model=self.config.model,
                 # Self-hosted vLLM (Qwen) runs: score on the agent's own model
                 # only — never fall back to the closed GPT path.
-                disable_closed_model_fallback=detect_provider(self.config.model) == "vllm",
+                disable_closed_model_fallback=self._no_closed_fallback(detect_provider),
             )
         except Exception as exc:
             logger.warning("ToolFactory: failed to create SourceScorer: %s", exc)
@@ -151,7 +171,7 @@ class ToolFactory:
                 agent_model=self.config.model,
                 # Self-hosted vLLM (Qwen): compact on the agent's own model
                 # only — never fall back to the closed GPT path.
-                disable_closed_model_fallback=detect_provider(self.config.model) == "vllm",
+                disable_closed_model_fallback=self._no_closed_fallback(detect_provider),
                 # Bound the re-assembled selected output to the same budget the
                 # agent enforces (config.max_tool_output_tokens, chars/token≈4),
                 # so the compactor can't return a near-full-page selection.
@@ -181,11 +201,14 @@ class ToolFactory:
 
     def _make_bash(self) -> BaseTool:
         from arcticswarm.tools.bash import BashTool
-        return BashTool()
+        from arcticswarm.tools.sandbox_exec import settings_from_config
+        # exec_backend=wsl -> run inside the WSL sandbox distro (tools/sandbox_exec.py).
+        return BashTool(exec_settings=settings_from_config(self.config))
 
     def _make_python_execute(self) -> BaseTool:
         from arcticswarm.tools.python_execute import PythonExecuteTool
-        return PythonExecuteTool()
+        from arcticswarm.tools.sandbox_exec import settings_from_config
+        return PythonExecuteTool(exec_settings=settings_from_config(self.config))
 
     def _make_reasoning(self) -> BaseTool:
         from arcticswarm.tools.reasoning import ReasoningTool
@@ -195,13 +218,19 @@ class ToolFactory:
             reasoning_effort=getattr(self.config, "reasoning_effort", None),
         )
 
+    def _is_folder_corpus(self) -> bool:
+        """True when web_search/web_fetch are backed by a local folder corpus."""
+        return (getattr(self.config, "corpus_backend", "") or "").strip().lower() == "folder"
+
     def _make_web_search(self) -> BaseTool | None:
         if self.config.web_search_provider in ("corpus", "cortex-corpus"):
             from arcticswarm.tools.corpus_retriever import build_corpus_retriever
             from arcticswarm.tools.corpus_search import CorpusSearchTool
+            folder = self._is_folder_corpus()
             return CorpusSearchTool(
                 retriever=build_corpus_retriever(self.config, self.sf_client),
                 judge=self._ensure_source_scorer(),
+                description=CorpusSearchTool.FOLDER_DESCRIPTION if folder else "",
             )
         # Cortex web-search provider: route web_search through the Snowflake
         # Cortex agent:run passthrough (Brave Search, or Brave Grounding Context
@@ -251,8 +280,12 @@ class ToolFactory:
         if getattr(self.config, "web_fetch_backend", "native") in ("corpus", "cortex-corpus"):
             from arcticswarm.tools.corpus_retriever import build_corpus_retriever
             from arcticswarm.tools.corpus_search import CorpusFetchTool
+            folder = self._is_folder_corpus()
             return CorpusFetchTool(
                 retriever=build_corpus_retriever(self.config, self.sf_client),
+                description=CorpusFetchTool.FOLDER_DESCRIPTION if folder else "",
+                # Page size = the agent's tool-output cap, so a page is never truncated.
+                page_chars=max(0, getattr(self.config, "max_tool_output_tokens", 0)) * 4,
             )
         # Cortex Grounding fetch backend: prepend a Cortex Grounding Context
         # fetch (tier 0) before the native Jina -> Serper -> requests chain.

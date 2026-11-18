@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 from typing import Any
 
@@ -60,34 +61,72 @@ class PythonExecuteTool(BaseTool):
         "The code runs in a subprocess with full access to installed packages."
     )
 
-    def __init__(self) -> None:
-        pass
+    SANDBOX_DESCRIPTION = (
+        "Run Python 3 code in an isolated Linux sandbox (agent virtualenv; you are "
+        "root). The folder being researched is at os.environ['CORPUS_ROOT']. "
+        "Preinstalled: pandas, numpy, pypdf, markitdown, bm25s, scikit-learn. You may "
+        "install ANY PyPI library via the `packages` argument (e.g. "
+        "[\"rapidfuzz\", \"networkx\"]) before the code runs. Print only what you "
+        "need; output is truncated. No internet except package installs."
+    )
+
+    def __init__(self, exec_settings: Any = None) -> None:
+        # Optional sandbox backend (tools/sandbox_exec.py, exec_backend=wsl): code
+        # runs in the WSL sandbox's agent venv and may pip-install packages first.
+        self._sandbox = None
+        self._default_timeout = _DEFAULT_TIMEOUT
+        if exec_settings is not None and getattr(exec_settings, "is_wsl", False):
+            from arcticswarm.tools.sandbox_exec import WslSandbox
+            self._sandbox = WslSandbox(exec_settings)
+            self._default_timeout = exec_settings.python_timeout
+            self.description = self.SANDBOX_DESCRIPTION
 
     def parameters_schema(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "code": {
-                    "type": "string",
-                    "description": "Python code to execute.",
-                },
-                "timeout": {
-                    "type": "integer",
-                    "description": f"Timeout in seconds. Default: {_DEFAULT_TIMEOUT}.",
-                },
+        props: dict[str, Any] = {
+            "code": {
+                "type": "string",
+                "description": "Python code to execute.",
             },
-            "required": ["code"],
+            "timeout": {
+                "type": "integer",
+                "description": f"Timeout in seconds. Default: {self._default_timeout}.",
+            },
         }
+        if self._sandbox is not None:
+            props["packages"] = {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "PyPI packages to pip-install before running (any library you need).",
+            }
+        return {"type": "object", "properties": props, "required": ["code"]}
+
+    def _execute_sandbox(self, code: str, timeout: int, packages: list[str] | None) -> ToolResult:
+        rc, out, err, timed_out = self._sandbox.python(code, timeout=timeout, packages=packages)
+        if timed_out:
+            return ToolResult(error=f"Python execution timed out after {timeout}s.", is_error=True)
+        parts: list[str] = []
+        if out:
+            parts.append(_truncate(out))
+        if err:
+            parts.append(f"STDERR:\n{_truncate(err)}")
+        output = "\n".join(parts) if parts else "(no output)"
+        if rc != 0:
+            return ToolResult(output=output, error=f"Exit code {rc}\n{output}", is_error=True)
+        return ToolResult(output=output)
 
     def execute(
         self,
         *,
         code: str,
-        timeout: int = _DEFAULT_TIMEOUT,
+        timeout: int | None = None,
+        packages: list[str] | None = None,
         **_: Any,
     ) -> ToolResult:
         if not code.strip():
             return ToolResult(error="Empty code.", is_error=True)
+        timeout = int(timeout or self._default_timeout)
+        if self._sandbox is not None:
+            return self._execute_sandbox(code, timeout, packages)
 
         # Run in a scratch directory so generated files (images, data) don't
         # pollute the repo working directory.
@@ -102,7 +141,9 @@ class PythonExecuteTool(BaseTool):
             env.pop("MallocStackLoggingNoCompact", None)
             env.setdefault("MPLBACKEND", "Agg")
             result = subprocess.run(
-                ["python3", path],
+                # sys.executable instead of "python3": a Windows venv has no
+                # python3.exe (the name resolves to the Microsoft Store stub).
+                [sys.executable, path],
                 capture_output=True,
                 text=True,
                 timeout=timeout,

@@ -1418,7 +1418,7 @@ class SubAgent:
         )
 
         # Remove domain-specific tools for summarize phase — force synthesis only
-        _STRIP_TOOLS = {"web_search", "web_fetch", "pdf_read"}
+        _STRIP_TOOLS = {"web_search", "web_fetch", "pdf_read", "bash", "python_execute"}
         saved_tools = dict(self.agent._tools)
         for tool_name in _STRIP_TOOLS:
             self.agent._tools.pop(tool_name, None)

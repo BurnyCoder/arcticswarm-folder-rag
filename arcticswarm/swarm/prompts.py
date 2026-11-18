@@ -57,6 +57,7 @@ def build_orchestrator_system_prompt(
     force_bbs_isolation: bool = False,
     enforce_alt_task: bool = True,
     skill_overrides: dict[str, str] | None = None,
+    folder_corpus: bool = False,
 ) -> str:
     """Build the unified orchestrator system prompt.
 
@@ -124,6 +125,15 @@ def build_orchestrator_system_prompt(
             "requiring external information, fact-checking, or current events. "
             "Can search the web, fetch full page content from URLs, and read "
             "PDF documents (academic papers, reports, etc.)."
+        )
+    if folder_corpus:
+        # Local-folder RAG: the "browsing" profile researches files, not the web.
+        _browsing_blurb = (
+            "**browsing** -- Local-folder research specialist. Tools: web_search "
+            "(BM25 over the folder's files), web_fetch (read a file by path), and, "
+            "when enabled, bash / python_execute (any command or code over the folder "
+            "in a Linux sandbox; can install tools). Use for every question that needs "
+            "evidence from the folder. There is NO internet access."
         )
     _coding_blurb = (
         "**coding** -- Code execution specialist. Tools: bash, "

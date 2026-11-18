@@ -345,7 +345,8 @@ class SourceScorer:
                 from arcticswarm.llm_client import derive_openai_base_url
                 openai_url = derive_openai_base_url(self._base_url)
                 self._client = OpenAI(
-                    api_key=self._openai_api_key or self._api_key,
+                    # Never reuse the Anthropic key for OpenAI (credential leak).
+                    api_key=self._openai_api_key,
                     base_url=openai_url,
                 )
         return self._client

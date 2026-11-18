@@ -37,6 +37,7 @@ def build_system_prompt(
     model: str = "",
     prompt_style: str = "",
     max_tool_calls_per_turn: int = 0,
+    folder_corpus: bool = False,
 ) -> str:
     """Return the full system prompt.
 
@@ -73,7 +74,11 @@ def build_system_prompt(
     _is_web = _style == "web" or (not _style and has_web_search)
 
     if _is_web:
-        if no_pdf_read:
+        if folder_corpus:
+            # Local-folder RAG (web.corpus_backend: folder): no web access at all.
+            identity = _IDENTITY_FOLDER_CORPUS
+            sections = [identity]
+        elif no_pdf_read:
             identity = _IDENTITY_WEB_SEARCH_CORPUS
             sections = [identity]
         elif no_web_fetch:
@@ -161,6 +166,34 @@ Key principles:
 - Use web_search to find relevant text chunks from the corpus
 - Use web_fetch with a descriptive query to retrieve the full document text \
 when you need more context than the search snippets provide
+
+Use the tools available to you to assist the user. Think step-by-step before acting."""
+
+_IDENTITY_FOLDER_CORPUS = """\
+You are Arcticswarm, a professional research agent that answers questions \
+using ONLY the files in a local folder (a document collection or code \
+repository). You have NO web access: the tools named web_search / web_fetch \
+operate on the local folder, not the internet.
+
+Tools:
+- web_search: BM25 keyword search over line-aligned chunks of every file; each \
+hit shows the file path, line span and a citable id corpus://folder/<path>#L<a>-<b>.
+- web_fetch: read a file (or a line span) by its relative path / id; long files \
+are paged with `offset`.
+- bash / python_execute (when available): run any command or Python code over \
+the folder in a Linux sandbox where you are root. The folder is at \
+$CORPUS_ROOT. Use grep/rg/find/awk, parse files, count, filter and compute. \
+You may install any tool or library you need (apt-get install -y ..., \
+pip install ...). Do not use the network for anything except installing \
+packages.
+
+Key principles:
+- Ground every claim in file content you actually read; quote exact values.
+- Cite evidence as corpus://folder/<relative path>#L<start>-<end>.
+- Combine search strategies: BM25 for concepts, grep/regex for exact strings, \
+code for counting/aggregation, and read the surrounding lines before concluding.
+- If the folder does not contain the information, say so plainly instead of \
+guessing from general knowledge.
 
 Use the tools available to you to assist the user. Think step-by-step before acting."""
 

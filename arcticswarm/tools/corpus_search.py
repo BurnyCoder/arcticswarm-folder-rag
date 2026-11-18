@@ -49,14 +49,25 @@ class CorpusSearchTool(BaseTool):
         "Use this to find information relevant to the research question."
     )
 
+    FOLDER_DESCRIPTION = (
+        "BM25 keyword search over the LOCAL FOLDER being researched (not the web). "
+        "Files are split into line-aligned chunks; each hit shows the file path, its "
+        "line span and a citable id 'corpus://folder/<path>#L<start>-<end>'. Use "
+        "distinctive keywords (names, identifiers, numbers, quoted phrases). For exact "
+        "strings, regexes or structured analysis use the bash / python_execute tools."
+    )
+
     def __init__(
         self,
         *,
         retriever: CorpusRetriever,
         judge: "SourceScorer | None" = None,
+        description: str = "",
     ) -> None:
         self._retriever = retriever
         self._judge = judge
+        if description:  # instance override (folder backend)
+            self.description = description
 
         # Stats (duck-type compat with WebSearchTool)
         self._total_searches = 0
@@ -161,7 +172,14 @@ class CorpusSearchTool(BaseTool):
                 continue
             cosine = r.get("cosine_similarity", 0.0)
             preview = desc[:2000] + "..." if len(desc) > 2000 else desc
-            lines.append(f"{i}. (cosine={cosine:.2f}) {preview}")
+            if r.get("docid"):
+                # Folder backend: show the file + line span and a citable URL line
+                # (the "URL:" line also feeds WebSourceTracker -> report references).
+                lines.append(f"{i}. {r.get('title', r['docid'])}  [bm25={r.get('bm25', 0.0):.2f}]")
+                lines.append(f"   URL: {r.get('url', '')}")
+                lines.append(preview)
+            else:
+                lines.append(f"{i}. (cosine={cosine:.2f}) {preview}")
             sc = score_by_idx.get(i - 1)
             if sc:
                 from arcticswarm.tools.source_scorer import SourceScorer
@@ -223,13 +241,49 @@ class CorpusFetchTool(BaseTool):
         "web_search aren't sufficient and you need the full document."
     )
 
-    def __init__(self, *, retriever: CorpusRetriever) -> None:
+    FOLDER_DESCRIPTION = (
+        "Read a file from the LOCAL FOLDER being researched (not the web). Pass "
+        "`docid` = a relative path ('src/app.py'), a line span ('src/app.py#L10-80') "
+        "or a 'corpus://folder/...' id copied from web_search results. Long files are "
+        "paged: use `offset` (character offset) to continue where the previous call "
+        "stopped. Without `docid`, `query` returns the best-matching whole file(s)."
+    )
+
+    def __init__(self, *, retriever: CorpusRetriever, description: str = "",
+                 page_chars: int = 0) -> None:
         self._retriever = retriever
         self._total_fetches = 0
         self._total_failures = 0
         self._fetch_log: list[dict[str, Any]] = []
+        # Folder backend: docid lookup + paging (page_chars = default page size).
+        self._folder_mode = bool(description)
+        self._page_chars = page_chars or 16000
+        if description:
+            self.description = description
 
     def parameters_schema(self) -> dict[str, Any]:
+        if self._folder_mode:
+            return {
+                "type": "object",
+                "properties": {
+                    "docid": {
+                        "type": "string",
+                        "description": "Relative file path, optionally with #L<start>-<end>, or a corpus://folder/ id.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Fallback when no docid: keywords describing the file to read.",
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Character offset to start from (paging through long files). Default 0.",
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "description": f"Characters to return (default {self._page_chars}).",
+                    },
+                },
+            }
         return {
             "type": "object",
             "properties": {
@@ -254,8 +308,22 @@ class CorpusFetchTool(BaseTool):
         query: str | None = None,
         url: str | None = None,
         count: int = 1,
+        docid: str | None = None,
+        offset: int = 0,
+        max_chars: int | None = None,
         **_: Any,
     ) -> ToolResult:
+        if self._folder_mode and (docid or url):
+            return self._fetch_page(str(docid or url), int(offset or 0), max_chars)
+        if self._folder_mode and query:
+            # A query (or a path passed as query) -> resolve to the best file, then page it.
+            try:
+                hits = self._retriever.fetch(query.strip(), 1)
+            except Exception as exc:
+                logger.warning("Corpus fetch backend error: %s", exc)
+                hits = None
+            if hits:
+                return self._fetch_page(hits[0].get("docid", ""), int(offset or 0), max_chars)
         q = (query or url or "").strip()
         if not q:
             return ToolResult(
@@ -291,6 +359,40 @@ class CorpusFetchTool(BaseTool):
             "total_chars": sum(len(r.get("text", "")) for r in results),
         })
         return self._format_results(results, q)
+
+    def _fetch_page(self, ref: str, offset: int, max_chars: int | None) -> ToolResult:
+        """Folder backend: exact file / line-span lookup with character paging."""
+        t0 = time.monotonic()
+        try:
+            results = self._retriever.fetch(ref, 1)
+        except Exception as exc:
+            logger.warning("Corpus fetch backend error: %s", exc)
+            results = None
+        exact = bool(results) and results[0].get("cosine_similarity", 0.0) == 1.0
+        self._total_fetches += 1
+        if not results or not exact:
+            self._total_failures += 1
+            self._fetch_log.append({"query": ref, "success": False,
+                                    "latency_ms": int((time.monotonic() - t0) * 1000)})
+            return ToolResult(output=(
+                f"No file matches docid {ref!r}. Use a path relative to the folder root "
+                "exactly as shown by web_search or `ls`/`find` (e.g. 'docs/a.md' or "
+                "'docs/a.md#L10-40')."
+            ))
+        r = results[0]
+        text = r.get("text", "")
+        size = max(1, int(max_chars or self._page_chars))
+        start = max(0, min(offset, len(text)))
+        page = text[start:start + size]
+        end = start + len(page)
+        header = f"File: {r.get('title', ref)}  |  {r.get('url', '')}  |  chars {start}-{end} of {len(text)}"
+        footer = (f"\n[... {len(text) - end} more chars: call web_fetch again with docid={r.get('docid', ref)!r}, offset={end}]"
+                  if end < len(text) else "")
+        self._fetch_log.append({"query": ref, "success": True, "result_count": 1,
+                                "latency_ms": int((time.monotonic() - t0) * 1000),
+                                "total_chars": len(page)})
+        return ToolResult(output=f"{header}\n\n{page}{footer}",
+                          metadata={"fetch_source": "folder_file", "docid": r.get("docid", ref)})
 
     @staticmethod
     def _format_results(results: list[dict[str, Any]], query: str) -> ToolResult:

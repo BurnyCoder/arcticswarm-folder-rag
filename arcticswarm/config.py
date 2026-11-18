@@ -65,6 +65,11 @@ AVAILABLE_MODELS: list[ModelInfo] = [
     ModelInfo("claude-4-sonnet",   "Sonnet 4",   3.0,  15.0, 0.30,  3.75),
     ModelInfo("claude-4-opus",     "Opus 4",    15.0,  75.0, 1.50, 18.75),
     ModelInfo("claude-haiku-4-5",  "Haiku 4.5",  1.0,   5.0, 0.10,  1.25),
+    # Haiku 5.5: $0.10/$0.50 per MTok for prompts <=100K tokens ($0.50/$2.50 above);
+    # cache read 0.1x input, 5-min cache write 1.25x (Anthropic pricing via the
+    # claude-api model table, cached 2026-11-03). The short-prompt card is listed;
+    # the folder-RAG config compacts at 90K tokens to stay on it.
+    ModelInfo("claude-haiku-5-5",  "Haiku 5.5",  0.10,  0.50, 0.01, 0.125),
     # OpenAI (GPT) — pricing approximate; cache fields unused
     ModelInfo("openai-gpt-5-chat", "GPT-5 Chat", 2.0,  8.0, 0.0, 0.0),
     ModelInfo("openai-gpt-5",      "GPT-5",      2.0,  8.0, 0.0, 0.0),
@@ -290,8 +295,29 @@ class ArcticswarmConfig:
     corpus_chunked_service: str = ""   # chunked snippets -> web_search
     corpus_service: str = ""           # full documents  -> web_fetch
     corpus_pat_connection: str = "default"
-    # Local corpus JSONL path (only used when corpus_backend="local").
+    # Local corpus JSONL path (corpus_backend="local") or folder root
+    # (corpus_backend="folder").
     corpus_local_path: str = ""
+    # --- Local folder corpus (corpus_backend="folder"; tools/folder_corpus.py) ---
+    folder_index_dir: str = ""       # where BM25 indexes are persisted ("" = temp dir)
+    folder_chunk_chars: int = 1500   # target chunk size (line-aligned)
+    # --- Code execution backend for bash / python_execute (tools/sandbox_exec.py) ---
+    # "local": original behaviour (host subprocess). "wsl": run inside a dedicated
+    # WSL2 distro (root, no Windows drive mounts, no interop) so agents can
+    # apt/pip-install any tool while staying isolated from the host.
+    exec_backend: str = "local"
+    exec_wsl_distro: str = "arcticswarm-sandbox"
+    exec_corpus_root: str = ""       # corpus path inside the sandbox -> $CORPUS_ROOT
+    exec_python: str = ""            # interpreter for python_execute ("" = default)
+    exec_bash_timeout: int = 60
+    exec_python_timeout: int = 300
+    # Soft no-web guard: proxy everything except package hosts (empty = off).
+    exec_proxy: str = ""
+    exec_no_proxy: str = ""
+    # Eval-awareness filter keywords for web_search/web_fetch results. None keeps
+    # the BrowseComp default ("browsecomp"); folder runs set [] because indexed
+    # files may legitimately mention benchmark names.
+    contamination_keywords: list[str] | None = None
 
     # When True, read_file returns base64 image content blocks for image
     # files (png, jpg, gif, webp) so the LLM can see them.  Off by default
@@ -746,6 +772,9 @@ class ArcticswarmConfig:
             backend = (getattr(self, "corpus_backend", "") or "stub").strip().lower()
             if backend == "local":
                 return bool(getattr(self, "corpus_local_path", "").strip())
+            if backend == "folder":  # corpus_local_path is a directory of files
+                root = getattr(self, "corpus_local_path", "").strip()
+                return bool(root) and Path(root).is_dir()
             if backend == "cortex":
                 return bool(
                     self.corpus_account.strip()

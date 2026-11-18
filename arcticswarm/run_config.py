@@ -316,6 +316,13 @@ class WebConfig:
     corpus_service: str = ""
     corpus_pat_connection: str = "default"
     corpus_local_path: str = ""
+    # --- Local folder corpus (corpus_backend: folder) ----------------------
+    # corpus_local_path is then a directory; see arcticswarm/tools/folder_corpus.py.
+    folder_index_dir: str = ""
+    folder_chunk_chars: int = 1500
+    # Eval-awareness keywords filtered from web_search/web_fetch output. Null keeps
+    # the BrowseComp default; folder runs use [] (files may mention benchmarks).
+    contamination_keywords: list[str] | None = None
     # --- Global cross-run fetch cache --------------------------------------
     # Override the shared web_fetch/pdf_read SQLite cache path for this run
     # (default resolved from settings ``fetch_cache_path`` / env
@@ -370,6 +377,18 @@ class ToolsConfig:
     # for a browsing agent) are lazy-instantiated via ``ToolFactory``.
     idle_reviewer: list[str] = field(default_factory=list)
     profiles: dict[str, ProfileConfig] = field(default_factory=dict)
+    # --- Code execution backend for bash / python_execute -------------------
+    # "local" = host subprocess (original). "wsl" = dedicated WSL2 sandbox distro
+    # (see arcticswarm/tools/sandbox_exec.py); agents are root there and may
+    # apt-get / pip install anything.
+    exec_backend: str = "local"
+    exec_wsl_distro: str = "arcticswarm-sandbox"
+    exec_corpus_root: str = ""
+    exec_python: str = ""
+    exec_bash_timeout: int = 60
+    exec_python_timeout: int = 300
+    exec_proxy: str = ""
+    exec_no_proxy: str = ""
 
 
 @dataclass
@@ -626,6 +645,21 @@ class RunConfig:
         config.corpus_service = self.web.corpus_service
         config.corpus_pat_connection = self.web.corpus_pat_connection
         config.corpus_local_path = self.web.corpus_local_path
+        config.folder_index_dir = self.web.folder_index_dir
+        config.folder_chunk_chars = self.web.folder_chunk_chars
+        config.contamination_keywords = (
+            None if self.web.contamination_keywords is None
+            else list(self.web.contamination_keywords)
+        )
+        # Code execution backend (tools.exec_*)
+        config.exec_backend = self.tools.exec_backend
+        config.exec_wsl_distro = self.tools.exec_wsl_distro
+        config.exec_corpus_root = self.tools.exec_corpus_root
+        config.exec_python = self.tools.exec_python
+        config.exec_bash_timeout = self.tools.exec_bash_timeout
+        config.exec_python_timeout = self.tools.exec_python_timeout
+        config.exec_proxy = self.tools.exec_proxy
+        config.exec_no_proxy = self.tools.exec_no_proxy
         # Coerce to a list of provider tokens.  A bare string override
         # (e.g. ``web.search_provider_order=serper`` or ``=serper,tavily``)
         # arrives as a str; ``list("serper")`` would shred it into single
