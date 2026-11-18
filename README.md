@@ -19,10 +19,19 @@
 | **Folder-aware prompts and gates** | • Folder identity in the system prompt and the orchestrator profile blurb<br>• code tools count as first-hand evidence for builder reviewers, and are blocked at wind-down and capped in output<br>• configurable contamination keywords<br>• `corpus://` references in reports | `system_prompt.py`, `swarm/prompts.py`, `swarm/tools.py`, `swarm/teammate.py`, `swarm/orchestrator.py`, `tools/execution.py`, `swarm/references.py` |
 | **Skills** | `folder-research`, `tool-usage-policy-folder`, `swarm-orchestration-dynamic-folder`. The last is the dynamic web skill with region/language pivots, anti-fame bias and "always one answer" removed, since folders can lack the answer. | `arcticswarm/skills/` |
 | **Logging** | Opt-in full LLM call log `ARCTICSWARM_LLM_LOG=<file.jsonl>`. It records every prompt delta and every response, with no truncation. | `llm_client.py` |
+| **Reflection budget** | Claude models that think by default (Haiku 5.5, Opus/Sonnet 5.x, Fable) get low effort and an 8K budget for the self-reflection call. With the old 1024-token budget, the reflection JSON was truncated. | `swarm/reflection.py` |
 | **Dependencies** | The heavy `opendataloader-pdf[hybrid]` (docling + torch) becomes an optional `pdf` extra. New `folder` extra: `bm25s`, `PyStemmer`. | `pyproject.toml` |
 | **Configs** | `conf/bench/folder_rag.yaml` (gated-BBS swarm) and `conf/bench/folder_rag_single_agent.yaml` (single-agent overlay) | `conf/bench/` |
 
 Tests: `pytest` gives 286 passed and 2 skipped on Windows. The two skips are POSIX-`pwd` assertions for the local bash backend. New tests are in `swarm/tests/test_folder_corpus.py` and `swarm/tests/test_sandbox_exec.py`; the WSL integration tests are skipped when the sandbox distro is absent.
+
+## Evaluation results with this fork (day 1, 2026-11-18)
+Full details are in the companion repo `BurnyCoder/arcticswarm-folder-rag-research`: its README, `reports/` and `results/day1/`. The setup: 20 paired questions per arm (10 MultiHop-RAG, 10 SWE-QA), all on Claude Haiku 5.5, comparing the gated-BBS swarm (`folder_rag.yaml`) against the single agent (`folder_rag_single_agent.yaml`).
+- **MultiHop-RAG:** both reached equal accuracy, with identical per-question outcomes.
+- **SWE-QA:** the swarm scored significantly lower under the strict SWE-QA rubric, with much longer answers.
+- **Cost:** the swarm cost about 50 times more per question.
+
+An agent-count sweep (`swarm.max_subagents` 2/4/8) is reported there as well. These are exploratory results from small samples.
 
 ## Quick start (folder RAG)
 
