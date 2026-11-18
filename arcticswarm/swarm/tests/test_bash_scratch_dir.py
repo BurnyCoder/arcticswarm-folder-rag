@@ -28,8 +28,17 @@ still override.
 from __future__ import annotations
 
 import os
+import sys
+
+import pytest
+
+# The local backend runs commands with shell=True. On Windows that shell's `pwd`
+# comes from MSYS/Git and prints POSIX-mapped paths (e.g. C:\tmp\...), so the
+# realpath comparisons below only hold on POSIX hosts.
+_posix_pwd = pytest.mark.skipif(sys.platform == "win32", reason="POSIX pwd semantics")
 
 
+@_posix_pwd
 def test_bash_default_cwd_is_isolated_scratch_dir(tmp_path, monkeypatch):
     """Without ``working_directory``, the command's CWD must be an isolated
     temp directory — never the process-launch CWD."""
@@ -80,6 +89,7 @@ def test_bash_scratch_dir_persists_across_calls(tmp_path, monkeypatch):
         tool.close()
 
 
+@_posix_pwd
 def test_bash_explicit_working_directory_still_honored(tmp_path, monkeypatch):
     """If the caller passes ``working_directory``, that wins over the
     scratch dir (same behaviour as before the fix)."""
