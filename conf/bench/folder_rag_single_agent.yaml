@@ -1,0 +1,8 @@
+# Overlay: ArcticSwarm single agent (B2 baseline) for folder RAG.
+# Use after folder_rag.yaml:
+#   arcticswarm-eval -c conf/bench/folder_rag.yaml -c conf/bench/folder_rag_single_agent.yaml ...
+# Same model, effort, tools (tools.agent = BM25 search + file fetch + bash + python)
+# and skills as the swarm's browsing subagents; only the multi-agent orchestration is off
+# (mirrors conf/bench/browsecomp_plus_qwen_single_agent.yaml).
+swarm:
+  enabled: false
