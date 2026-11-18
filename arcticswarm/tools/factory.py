@@ -96,6 +96,26 @@ class ToolFactory:
     # Source scorer (shared dependency for web tools)
     # ------------------------------------------------------------------
 
+    def _no_closed_fallback(self, detect_provider: Any) -> bool:
+        """True when scorer/compactor must NOT fall back to the OpenAI GPT path.
+
+        Previously this was only set for self-hosted vLLM models. With a Claude
+        agent and no ``openai_api_key``, the fallback built an OpenAI client with
+        ``openai_api_key or api_key`` — i.e. it sent the *Anthropic* key to
+        api.openai.com as a Bearer token. Now the fallback is disabled for vLLM
+        runs, when the run config disables closed-model fallback, or when no
+        OpenAI/Azure credentials exist.
+        """
+        cfg = self.config
+        has_openai = bool((getattr(cfg, "openai_api_key", "") or "").strip()) or bool(
+            getattr(cfg, "use_azure_openai", False) and getattr(cfg, "azure_openai_api_key", "")
+        )
+        return (
+            detect_provider(cfg.model) == "vllm"
+            or bool(getattr(cfg, "disable_closed_model_fallback", False))
+            or not has_openai
+        )
+
     def _ensure_source_scorer(self) -> Any | None:
         if self._source_scorer is not None:
             return self._source_scorer
@@ -116,7 +136,7 @@ class ToolFactory:
                 agent_model=self.config.model,
                 # Self-hosted vLLM (Qwen) runs: score on the agent's own model
                 # only — never fall back to the closed GPT path.
-                disable_closed_model_fallback=detect_provider(self.config.model) == "vllm",
+                disable_closed_model_fallback=self._no_closed_fallback(detect_provider),
             )
         except Exception as exc:
             logger.warning("ToolFactory: failed to create SourceScorer: %s", exc)
@@ -151,7 +171,7 @@ class ToolFactory:
                 agent_model=self.config.model,
                 # Self-hosted vLLM (Qwen): compact on the agent's own model
                 # only — never fall back to the closed GPT path.
-                disable_closed_model_fallback=detect_provider(self.config.model) == "vllm",
+                disable_closed_model_fallback=self._no_closed_fallback(detect_provider),
                 # Bound the re-assembled selected output to the same budget the
                 # agent enforces (config.max_tool_output_tokens, chars/token≈4),
                 # so the compactor can't return a near-full-page selection.
