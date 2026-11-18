@@ -390,8 +390,13 @@ def run_reflection(
     # GPT reasoning models: use low effort for reflection (simple JSON evaluation)
     # and bump token budget since reasoning tokens consume the output budget.
     is_gpt = model.startswith("gpt") or model.startswith("openai-")
-    reasoning = "low" if is_gpt else None
-    if is_gpt:
+    # Claude models whose (adaptive) thinking is ON by default — Haiku 5.5, Opus/Sonnet
+    # 5.x, Fable — spend thinking tokens out of max_tokens even when no thinking param is
+    # sent; with the 1024 default the JSON was cut off ("Unterminated string", observed in
+    # the folder-RAG smoke test). Treat them like GPT reasoning models: low effort, 8K budget.
+    thinks_by_default = model.startswith(("claude-haiku-5", "claude-opus-5", "claude-sonnet-5", "claude-fable"))
+    reasoning = "low" if (is_gpt or thinks_by_default) else None
+    if is_gpt or thinks_by_default:
         max_tokens = max(max_tokens, 8000)
 
     if compact:
