@@ -29,9 +29,10 @@ Tests: `pytest` gives 286 passed and 2 skipped on Windows. The two skips are POS
 Full details are in the companion repo `BurnyCoder/arcticswarm-folder-rag-research`: its README, `reports/` and `results/day1/`. The setup: 20 paired questions per arm (10 MultiHop-RAG, 10 SWE-QA), all on Claude Haiku 5.5, comparing the gated-BBS swarm (`folder_rag.yaml`) against the single agent (`folder_rag_single_agent.yaml`).
 - **MultiHop-RAG:** both reached equal accuracy, with identical per-question outcomes.
 - **SWE-QA:** the swarm scored significantly lower under the strict SWE-QA rubric, with much longer answers.
-- **Cost:** the swarm cost about 50 times more per question.
+- **Cost:** the swarm cost much more per question. Exact figures, generated from the result files, are in the companion repo.
+- **Agent-count sweep:** see below.
 
-An agent-count sweep (`swarm.max_subagents` 2/4/8) is reported there as well. These are exploratory results from small samples.
+An agent-count sweep (`swarm.max_subagents` 2/4/8/32) is reported there as well. Caps of 8 or more never bound, because the orchestrator spawned about 6–7 agents; caps of 2–4 mostly ran into the time budget; and no cap beat the single agent. These are exploratory results from small samples.
 
 ## Quick start (folder RAG)
 
