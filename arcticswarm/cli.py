@@ -31,8 +31,11 @@ import re
 import sys
 
 import time as _time
-import tty
-import termios
+try:  # POSIX raw-terminal input for the interactive model picker
+    import tty
+    import termios
+except ImportError:  # pragma: no cover - Windows uses msvcrt in _read_key
+    tty = termios = None  # type: ignore[assignment]
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -363,6 +366,16 @@ _EFFORT_LEVELS = ["none", "low", "medium", "high", "xhigh"]
 
 def _read_key() -> str:
     """Read a single keypress from stdin (raw mode). Returns a string tag."""
+    if termios is None:  # Windows: msvcrt.getwch reads one key without echo
+        import msvcrt
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):  # prefix byte of arrow / function keys
+            return {"H": "up", "P": "down", "M": "right", "K": "left", "G": "home"}.get(msvcrt.getwch(), "")
+        if ch in ("\r", "\n"):
+            return "enter"
+        if ch in ("\x03", "\x04", "\x1b", "q"):
+            return "esc"
+        return ch
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     try:

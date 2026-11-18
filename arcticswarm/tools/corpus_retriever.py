@@ -339,7 +339,7 @@ class LocalCorpusRetriever(CorpusRetriever):
         path = Path(self._corpus_path) if self._corpus_path else None
         if path and path.exists():
             try:
-                with path.open() as fh:
+                with path.open(encoding="utf-8") as fh:
                     for line in fh:
                         line = line.strip()
                         if not line:
