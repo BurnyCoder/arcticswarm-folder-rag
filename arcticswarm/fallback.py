@@ -35,6 +35,7 @@ them (the empty-response fallback ladder, context compaction) live on
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -43,6 +44,9 @@ from arcticswarm.logging_utils import (
     log_empty_fallback,
     log_empty_fallback_for_agent,
 )
+
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from arcticswarm.llm_client import LLMResponse

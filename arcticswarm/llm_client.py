@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -144,6 +145,37 @@ def _patch_httpx_client_del() -> None:
 _patch_httpx_client_del()
 
 
+def anthropic_client_kwargs(api_key: str = "", base_url: str = "") -> dict[str, Any]:
+    """Build ``anthropic.Anthropic(**kwargs)`` arguments shared by agents and the judge.
+
+    Local: maps (api_key, base_url) to SDK kwargs exactly as before (a custom
+    base_url means a proxy that wants ``auth_token``), and adds two things the
+    public API needs for long swarm runs:
+
+    * ``anthropic-workspace-id`` header from ``ANTHROPIC_WORKSPACE_ID`` — API keys
+      that are not scoped to a workspace get HTTP 400 without it (observed in
+      scripts/probe_haiku.py on 2026-11-18).
+    * ``max_retries`` (env ``ARCTICSWARM_ANTHROPIC_MAX_RETRIES``, default 8): the
+      SDK's own exponential backoff honours ``retry-after`` on 429/529/5xx. The
+      framework's ``fallback.is_retryable`` only recognises OpenAI exception types,
+      so without this Anthropic rate limits surfaced after the SDK default of 2.
+
+    Global: every Anthropic client in the package (agent LLM client, eval judge)
+    goes through this helper so headers/retries stay consistent.
+    """
+    kwargs: dict[str, Any] = {}
+    is_custom = bool(base_url) and base_url != "https://api.anthropic.com"
+    if api_key:
+        kwargs["auth_token" if is_custom else "api_key"] = api_key
+    if is_custom:
+        kwargs["base_url"] = base_url
+    workspace = os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip()
+    if workspace:
+        kwargs["default_headers"] = {"anthropic-workspace-id": workspace}
+    kwargs["max_retries"] = int(os.environ.get("ARCTICSWARM_ANTHROPIC_MAX_RETRIES", "8"))
+    return kwargs
+
+
 class AnthropicLLMClient(BaseLLMClient):
     """Wraps ``anthropic.Anthropic`` and normalises responses."""
 
@@ -157,16 +189,8 @@ class AnthropicLLMClient(BaseLLMClient):
     ) -> None:
         import anthropic
 
-        client_kwargs: dict[str, Any] = {}
-        is_custom = base_url and base_url != "https://api.anthropic.com"
-        if api_key:
-            if is_custom:
-                client_kwargs["auth_token"] = api_key
-            else:
-                client_kwargs["api_key"] = api_key
-        if is_custom:
-            client_kwargs["base_url"] = base_url
-        self._client = anthropic.Anthropic(**client_kwargs)
+        # Shared construction: workspace header + SDK retries (see helper docstring).
+        self._client = anthropic.Anthropic(**anthropic_client_kwargs(api_key, base_url))
         self._enable_1m_context_model = enable_1m_context_model
         self._disable_extended_thinking = disable_extended_thinking
 
@@ -259,9 +283,23 @@ class AnthropicLLMClient(BaseLLMClient):
     }
 
     # Models that use adaptive thinking (effort-based) instead of budget-based.
+    # Matched with ``model.startswith(prefix)``. Claude 4.6+ generations take
+    # ``thinking={"type": "adaptive"}`` + ``output_config.effort``; on Haiku 5.5
+    # (and Opus 4.7+/5.x, Sonnet 5.x, Fable) ``{"type": "enabled", "budget_tokens"}``
+    # is rejected with HTTP 400 — verified for claude-haiku-5-5 by
+    # scripts/probe_haiku.py ("thinking.type.enabled is not supported for this
+    # model. Use thinking.type.adaptive and output_config.effort"). Source for the
+    # per-model rules: Anthropic model-migration guide / thinking table.
     _ADAPTIVE_THINKING_MODELS: frozenset[str] = frozenset({
         "claude-opus-4-6",
         "claude-opus-4-6-20250501",
+        "claude-sonnet-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-5",      # also matches claude-opus-5-5
+        "claude-sonnet-5",    # also matches claude-sonnet-5-5
+        "claude-haiku-5",     # claude-haiku-5-5
+        "claude-fable",
     })
 
     # Models that should NEVER use extended/adaptive thinking.

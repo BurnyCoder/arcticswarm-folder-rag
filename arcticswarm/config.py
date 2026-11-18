@@ -65,6 +65,11 @@ AVAILABLE_MODELS: list[ModelInfo] = [
     ModelInfo("claude-4-sonnet",   "Sonnet 4",   3.0,  15.0, 0.30,  3.75),
     ModelInfo("claude-4-opus",     "Opus 4",    15.0,  75.0, 1.50, 18.75),
     ModelInfo("claude-haiku-4-5",  "Haiku 4.5",  1.0,   5.0, 0.10,  1.25),
+    # Haiku 5.5: $0.10/$0.50 per MTok for prompts <=100K tokens ($0.50/$2.50 above);
+    # cache read 0.1x input, 5-min cache write 1.25x (Anthropic pricing via the
+    # claude-api model table, cached 2026-11-03). The short-prompt card is listed;
+    # the folder-RAG config compacts at 90K tokens to stay on it.
+    ModelInfo("claude-haiku-5-5",  "Haiku 5.5",  0.10,  0.50, 0.01, 0.125),
     # OpenAI (GPT) — pricing approximate; cache fields unused
     ModelInfo("openai-gpt-5-chat", "GPT-5 Chat", 2.0,  8.0, 0.0, 0.0),
     ModelInfo("openai-gpt-5",      "GPT-5",      2.0,  8.0, 0.0, 0.0),
