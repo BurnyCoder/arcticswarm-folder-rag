@@ -1,6 +1,6 @@
 # ArcticSwarm — folder-RAG fork (Claude Haiku 5.5, local folders, sandboxed code)
 
-> **This is a private, modified copy of [Snowflake-AI-Research/ArcticSwarm](https://github.com/Snowflake-AI-Research/ArcticSwarm)** (Apache-2.0), branch **`folder-rag`**.
+> **This is a modified copy (not a GitHub fork) of [Snowflake-AI-Research/ArcticSwarm](https://github.com/Snowflake-AI-Research/ArcticSwarm)** (Apache-2.0), branch **`folder-rag`**.
 > It adapts ArcticSwarm from live-web deep research to **retrieval-augmented generation (RAG) over a local folder of many files**, with no web search, every agent on **Claude Haiku 5.5**, and agents allowed to **run arbitrary bash/Python over the files** in an isolated Linux sandbox.
 > The evaluation harness, preregistration and reports are in the companion repo `BurnyCoder/arcticswarm-folder-rag-research`, which uses this repo as a git submodule.
 > The original README follows below the horizontal rule, unchanged.
